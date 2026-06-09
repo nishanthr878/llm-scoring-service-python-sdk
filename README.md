@@ -119,6 +119,3 @@ result.scored_at        # ISO timestamp
 - [Java SDK](https://github.com/nishanthr878/llm-scoring-service-java-sdk)
 - [UI](https://github.com/nishanthr878/llm-scoring-service-ui)
 
-## License
-
-MIT
