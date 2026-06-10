@@ -28,15 +28,14 @@ class ConversationTracker:
         return self
 
     def track(self, user_message: str, assistant_response: str) -> None:
-        """Fire and forget — non-blocking."""
+        """Fire and forget — non-blocking async ingest."""
         self.history.append(ChatMessage.user(user_message))
         self.history.append(ChatMessage.assistant(assistant_response))
 
-        messages = self._resolve_messages()
-        payload = self._build_payload(messages)
+        payload = self._build_payload(self._resolve_messages())
 
         thread = threading.Thread(
-            target=self._submit,
+            target=self._submit_async,
             args=(payload,),
             daemon=True
         )
@@ -45,26 +44,28 @@ class ConversationTracker:
     def track_and_wait(
         self, user_message: str, assistant_response: str
     ) -> Optional[ScoringResponse]:
-        """Synchronous — blocks until scoring completes. Useful for tests."""
+        """Synchronous — blocks until scoring result returns."""
         self.history.append(ChatMessage.user(user_message))
         self.history.append(ChatMessage.assistant(assistant_response))
 
-        messages = self._resolve_messages()
-        payload = self._build_payload(messages)
+        payload = self._build_payload(self._resolve_messages())
 
-        return self._submit_sync(payload)
+        try:
+            return self.http_client.ingest_sync(payload)
+        except Exception as e:
+            self._handle_error(e)
+            return None
 
     def submit_all(self) -> None:
-        """Submit full conversation history."""
+        """Submit full conversation history async."""
         payload = self._build_payload(list(self.history))
         thread = threading.Thread(
-            target=self._submit,
+            target=self._submit_async,
             args=(payload,),
             daemon=True
         )
         thread.start()
 
-    # Context manager support — use with `with` statement
     def __enter__(self):
         return self
 
@@ -74,15 +75,12 @@ class ConversationTracker:
 
     def _resolve_messages(self) -> List[ChatMessage]:
         mode = self.config.mode
-
         if mode == TrackingMode.TURN_BY_TURN:
             return self.history[-2:]
-
         elif mode == TrackingMode.SLIDING_WINDOW:
             window = self.config.window_size * 2
             return self.history[-window:]
-
-        else:  # FULL_CONVERSATION
+        else:
             return list(self.history)
 
     def _build_payload(self, messages: List[ChatMessage]) -> dict:
@@ -94,20 +92,11 @@ class ConversationTracker:
             "messages": [m.to_dict() for m in messages],
         }
 
-    def _submit(self, payload: dict) -> None:
+    def _submit_async(self, payload: dict) -> None:
         try:
-            result = self.http_client.ingest(payload)
-            if result and self._on_complete:
-                self._on_complete(result)
+            self.http_client.ingest(payload)
         except Exception as e:
             self._handle_error(e)
-
-    def _submit_sync(self, payload: dict) -> Optional[ScoringResponse]:
-        try:
-            return self.http_client.ingest(payload)
-        except Exception as e:
-            self._handle_error(e)
-            return None
 
     def _handle_error(self, e: Exception) -> None:
         if self.config.silent_on_error:
